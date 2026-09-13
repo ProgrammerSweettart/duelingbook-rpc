@@ -70,6 +70,7 @@ test('best-of-3 score, series fallback, turn, result card', () => {
   assert.equal(lab({ kind: 'duel', formatCode: 'gu', of: 1, seriesGame: 2, seriesScore: [1, 0, 1] }), 'Dueling · Goat Format · Game 2 · 1-0-1');
   assert.equal(lab({ kind: 'result', won: false, score: [0, 2, 0], formatCode: 'uu' }), 'Match over · Unlimited · Lost 0-2');
   assert.equal(lab({ kind: 'result', won: true }), 'Match over · Won');
+  assert.equal(lab({ kind: 'result', winner: 'GalaxiaxD', score: [2, 1, 0], formatCode: 'uu' }), 'Match over · Unlimited · GalaxiaxD won 2-1');
   assert.equal(normalizeState({ kind: 'duel', score: [1, 'x', 0] }).score, undefined);
   const hover = (b) => toActivity(normalizeState(b), { largeImageKey: 'art' }).largeImageText;
   assert.equal(hover({ kind: 'duel', deck: 'Paleo Frog', of: 3, lp: [8000, 6000] }), 'Paleo Frog · ahead on life points, act natural');

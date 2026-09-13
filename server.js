@@ -89,7 +89,7 @@ function describe(s) {
   if (s.kind === 'deck') return `deck editor${s.deckName ? ` "${s.deckName}"` : ''}${afk}`;
   if (s.kind === 'duel') return `duel ${live()}${s.turn ? ` turn ${s.turn}` : ''}${s.deck ? ` deck "${s.deck}"` : ''}${s.lastCard ? ` card "${s.lastCard.name || s.lastCard.id}"` : ''}${s.watchers ? ` ${s.watchers} watching` : ''}`;
   if (s.kind === 'watching') return `watching ${live()}${s.watchers ? ` ${s.watchers} watching` : ''}`;
-  if (s.kind === 'result') return `match over: ${s.won ? 'won' : 'lost'}${s.score ? ` ${s.score.join('-')}` : ''}`;
+  if (s.kind === 'result') return `match over: ${s.winner ? `${s.winner} won` : (s.won ? 'won' : 'lost')}${s.score ? ` ${s.score.join('-')}` : ''}`;
   if (s.kind === 'solo') return `solo${s.deck ? ` "${s.deck}"` : ''}${s.turn ? ` turn ${s.turn}` : ''}`;
   if (s.kind === 'browsing') return `browsing ${s.pool ? 'pool' : s.hosting ? 'hosting' : s.screen || '?'}${afk}`;
   return 'none';

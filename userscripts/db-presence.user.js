@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuelingBook → Discord Rich Presence
 // @namespace    duelingbook-rpc
-// @version      0.7.0
+// @version      0.7.1
 // @description  Sends deck-editor / duel / watching / browsing / AFK state to the local duelingbook-rpc service, which mirrors it to Discord.
 // @author       duelingbook-rpc
 // @match        https://www.duelingbook.com/*
@@ -33,7 +33,7 @@
   'use strict';
   if (window.__dbrpc) return;
 
-  const VERSION = '0.7.0';
+  const VERSION = '0.7.1';
   const ENDPOINT = 'http://127.0.0.1:41337/presence';
   const POLL_MS = 1000;
   const HEARTBEAT_MS = 20000; // the service clears presence after 60 s without one
@@ -137,7 +137,10 @@
     if (bo3 && bo3.duelId === currentDuelId()) { if (p1Lost) bo3.l++; else bo3.w++; }
     if (m.over === true) {
       if (series) series.over = true;
-      if (g('duelist') === true && p[0] === me()) result = { until: Date.now() + 30000, won: !p1Lost, score: bo3 && bo3.duelId === currentDuelId() ? [bo3.w, bo3.l, bo3.d] : undefined, players: p, formatCode: duel.formatCode };
+      const sc = bo3 && bo3.duelId === currentDuelId() ? [bo3.w, bo3.l, bo3.d] : undefined; // player-1 side
+      const formatCode = duel.formatCode || codeOf({ format: g('duelFormat') }) || (watchInfo && watchInfo.formatCode);
+      if (g('duelist') === true && p[0] === me()) result = { until: Date.now() + 30000, won: !p1Lost, score: sc, players: p, formatCode };
+      else result = { until: Date.now() + 30000, winner: p1Lost ? p[1] : p[0], score: sc && (p1Lost ? [sc[1], sc[0], sc[2]] : sc), players: p, formatCode }; // watching: winner's side
     }
   }
   function deckName(id) {
@@ -288,11 +291,11 @@
     return { kind: 'solo', deck, turn: turn > 0 ? turn : undefined, startedAt: soloClock.startedAt, lastCard: recentCard() };
   }
 
-  // Shown for 30 s after your own match ends (the site drops duel_active; the result screen stays up).
+  // Shown for 30 s after a match ends — yours (Won/Lost) or one you're watching (who won).
   function resultState() {
     if (!result || Date.now() > result.until) { result = null; return null; }
     if (currentDuelId() !== 0 && g('duel_active') === true) return null; // a rematch already started
-    return { kind: 'result', won: result.won, score: result.score, players: result.players, formatCode: result.formatCode, startedAt: result.until - 30000 };
+    return { kind: 'result', won: result.won, winner: result.winner, score: result.score, players: result.players, formatCode: result.formatCode, startedAt: result.until - 30000 };
   }
 
   // ---------------- watching (best effort — not in the capture yet) ----------------
@@ -302,6 +305,7 @@
     let watching = DUEL_FRAMES.has(g('currentLabel')) || isVisible(document.getElementById('duel'));
     try { if (typeof window.isWatching === 'function') watching = watching || window.isWatching() === true; } catch { /* ignore */ }
     if (!watching) { if (watch.key) { series = null; bo3 = null; phaseClock.key = null; watchers.clear(); } watch.key = null; return null; }
+    if (result && Date.now() < result.until && g('duel_active') !== true) return null; // match decided → the result card takes over
     const p = players();
     const id = currentDuelId();
     watch.key = `${id}:${p.players ? p.players.join('|') : ''}`;

@@ -144,6 +144,12 @@ test('replays the captured match through the userscript', { skip: !capture && 'n
   const summoned = new Set(events.filter((e) => e.type === 'ws-in' && e.json && e.json.action === 'Duel' && ['Normal Summon', 'SS ATK', 'SS DEF', 'Activate ST', 'To ST', 'OL ATK', 'OL DEF', 'Declare'].includes(e.json.play) && e.json.username === 'Sweettart' && e.json.card).map((e) => e.json.card.id));
   for (const id of shownIds) assert.ok(summoned.has(id), `card ${id} shown only because of a public play`);
   assert.ok(watching.some((w) => w.watchers >= 1), 'spectator count while watching');
+  // J's Back conceded the deciding game at 02:12:57 while I watched → result card naming the winner, gone once Back to RPS restarts the duel
+  const wres = transitions.find((t) => t.kind === 'result' && t.winner);
+  assert.ok(wres && wres.at >= '02:12:57' && wres.at < '02:13:03', 'spectator result card right after the final concession');
+  assert.equal(wres.winner, 'GalaxiaxD');
+  assert.equal(wres.score, undefined, 'rejoined mid-best-of-3 with no siding witnessed → no score to claim');
+  assert.equal(transitions[transitions.indexOf(wres) + 1].kind, 'watching', 'back to watching on the rematch');
   const res = transitions.find((t) => t.kind === 'result');
   assert.ok(res && res.at >= '01:40:49' && res.at < '01:41:01', 'result card right after the final concession');
   assert.equal(res.won, false); assert.equal(String(res.score), '0,2,0');
