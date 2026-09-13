@@ -1,0 +1,12 @@
+{
+  "clientId": "1548382602493165608",
+  "port": 41337,
+  "host": "127.0.0.1",
+  "largeImageKey": "screenshot_2026-09-12_at_8_56_37_pm",
+  "largeImageText": "DuelingBook",
+  "staleAfterSeconds": 60,
+  "allowedOrigins": [
+    "https://www.duelingbook.com",
+    "https://duelingbook.com"
+  ]
+}
