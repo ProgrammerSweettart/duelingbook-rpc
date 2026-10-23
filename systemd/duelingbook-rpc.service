@@ -1,0 +1,18 @@
+# Linux autostart (user service). Untested by the author — reports welcome.
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|__DIR__|$PWD|g; s|__NODE__|$(command -v node)|g" systemd/duelingbook-rpc.service > ~/.config/systemd/user/duelingbook-rpc.service
+#   systemctl --user daemon-reload && systemctl --user enable --now duelingbook-rpc
+#   journalctl --user -u duelingbook-rpc -f
+[Unit]
+Description=DuelingBook Discord Rich Presence
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=__DIR__
+ExecStart=__NODE__ __DIR__/server.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

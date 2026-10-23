@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuelingBook → Discord Rich Presence
 // @namespace    duelingbook-rpc
-// @version      0.8.0
+// @version      0.9.0
 // @description  Sends deck-editor / duel / watching / browsing / AFK state to the local duelingbook-rpc service, which mirrors it to Discord.
 // @author       duelingbook-rpc
 // @match        https://www.duelingbook.com/*
@@ -37,6 +37,9 @@
 
   Precedence: duel > watching > deck editor > browsing; AFK wraps deck/browsing (never a live duel).
 
+  Privacy: deck names and the card art of your last play are sent only in RATED duels by default.
+           localStorage.setItem('dbrpc.reveal', 'always' | 'ranked' | 'never') changes that.
+
   Debug: localStorage.setItem('dbrpc.debug', '1')  → logs every state change to the console.
          window.__dbrpc.state()                    → current computed state
 */
@@ -45,7 +48,7 @@ function pageMain() {
   'use strict';
   if (window.__dbrpc) return;
 
-  const VERSION = '0.8.0';
+  const VERSION = '0.9.0';
   const ENDPOINT = 'http://127.0.0.1:41337/presence';
   const EV_SEND = '__dbrpc_send';
   const EV_RESULT = '__dbrpc_result';
@@ -58,6 +61,17 @@ function pageMain() {
   const NOT_LOGGED_IN = new Set(['', 'start', 'front_page', 'connecting', 'lost_conn', 'lost_conn2', 'closed', 'banned', 'already_logged_in', 'over_limit', 'rejected', 'kicked', 'timed_out', 'terminated']);
 
   const debug = () => { try { return localStorage.getItem('dbrpc.debug') === '1'; } catch { return false; } };
+
+  // What may leave the browser about WHAT you are playing (deck name, the card art of your last play).
+  // Everything else — format, score, life points, opponent, timers — is public at the table anyway.
+  //   'ranked' (default) rated duels only: deck building and solo testing stay private, and so do
+  //                      unrated games, where an opponent could read your tech off your Discord card
+  //   'always'           show it everywhere
+  //   'never'            never show either
+  // Change with: localStorage.setItem('dbrpc.reveal', 'always' | 'ranked' | 'never')
+  const REVEAL_DEFAULT = 'ranked';
+  const reveal = () => { try { return localStorage.getItem('dbrpc.reveal') || REVEAL_DEFAULT; } catch { return REVEAL_DEFAULT; } };
+  const mayReveal = (rated) => { const r = reveal(); return r === 'always' || (r === 'ranked' && rated === true); };
   const g = (name) => { try { return window[name]; } catch { return undefined; } };
   const str = (v) => (typeof v === 'string' && v ? v : undefined);
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
@@ -289,8 +303,9 @@ function pageMain() {
       if (code) duel.formatCode = code;
     }
     const info = gameInfo();
-    const deck = deckInUse ? deckName(deckInUse) : undefined;
-    return Object.assign({ kind: 'duel', formatCode: duel.formatCode, rated: g('rated') === true, startedAt: phaseStart(id, info), deck, lastCard: recentCard(), watchers: watchers.size || undefined }, info, players());
+    const rated = g('rated') === true;
+    const open = mayReveal(rated);
+    return Object.assign({ kind: 'duel', formatCode: duel.formatCode, rated, startedAt: phaseStart(id, info), deck: open && deckInUse ? deckName(deckInUse) : undefined, lastCard: open ? recentCard() : undefined, watchers: watchers.size || undefined }, info, players());
   }
 
   // Solo mode ("test hands"): hosted with format 'so'; startDuel() sets solo=true. Keyed on that global and the
@@ -302,8 +317,8 @@ function pageMain() {
     if (!onDuelScreen) { soloClock.startedAt = null; return null; }
     if (!soloClock.startedAt) soloClock.startedAt = Date.now();
     const turn = Number(g('turnCount'));
-    const deck = deckInUse ? deckName(deckInUse) : undefined;
-    return { kind: 'solo', deck, turn: turn > 0 ? turn : undefined, startedAt: soloClock.startedAt, lastCard: recentCard() };
+    const open = mayReveal(false); // solo is never rated: this is deck-testing, private by default
+    return { kind: 'solo', deck: open && deckInUse ? deckName(deckInUse) : undefined, turn: turn > 0 ? turn : undefined, startedAt: soloClock.startedAt, lastCard: open ? recentCard() : undefined };
   }
 
   // Shown for 30 s after a match ends — yours (Won/Lost) or one you're watching (who won).
@@ -339,7 +354,7 @@ function pageMain() {
       name = sel && sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent.trim() : '';
     } catch { name = ''; }
     if (!name && typeof g('deckName') === 'string') name = g('deckName').trim();
-    return { kind: 'deck', deckName: name || undefined };
+    return { kind: 'deck', deckName: mayReveal(false) ? name || undefined : undefined };
   }
 
   // ---------------- browsing (anything else while logged in) ----------------

@@ -28,27 +28,68 @@ Scores are the **current best-of-3** from player 1's side (you, when dueling): e
 
 Not logged in, tab closed, or browser quit → presence cleared. AFK never wraps a live duel.
 
-## Status of this build
+### What it does *not* share
 
-| piece | state |
-|---|---|
-| Node service, Discord connection manager, launchd agent | done, tested (8 tests + against a fake Discord IPC server + launchd KeepAlive) |
-| deck-editor presence | done, verified live |
-| duel presence (players, life points, game N of 3, siding) | done — written against a captured best-of-3 and replayed through the real userscript in `test/replay.test.js` |
-| browsing / pool / hosting | done — from `currentLabel`, `inPool`, `hosting` + the outbound `Join pool` / `Host duel` messages (replayed) |
-| AFK | built from the client code (`Away`/`Back` broadcasts naming you; cleared on local input) — not yet seen live |
-| watching | done, verified live — the `Watch duel` response carries the format, score and both players |
-| capture userscript | done; keep it around for the next time DuelingBook changes something |
+Your **deck name** and the **card art of your last play** are sent only during **rated duels**. Deck building, solo test hands and unrated games show a generic card, so nobody reads your tech off your Discord while you're brewing or playtesting. Everything else on the card (format, score, life points, opponent, timers) is already public at the table.
 
-Requirements: Discord desktop app (Rich Presence goes over its local IPC socket, never the web app; keep *Settings → Activity Privacy → Share your detected activities with others* on) and Tampermonkey in Zen/Firefox.
+The gate runs in the browser — withheld information is never sent to the service at all, so it can't leak from the log either. Change it in the DuelingBook tab's console:
 
-## Sharing it with friends
+```js
+localStorage.setItem('dbrpc.reveal', 'always')  // show deck + card art everywhere
+localStorage.setItem('dbrpc.reveal', 'never')   // never show either
+localStorage.removeItem('dbrpc.reveal')         // back to rated-only (default)
+```
 
-Everyone who runs this uses the **same Discord application ID** (the one in `config.json`) — that's how Rich Presence works, one app ID per program, and the card art/name live in that app. Your username, avatar, deck names and everything else on the card are read from *their* DuelingBook session. Each friend needs: Discord desktop, Tampermonkey (Firefox/Zen/Chrome), Node ≥ 20, and this folder. On macOS: `./install.sh`, then open `http://127.0.0.1:41337/userscripts/db-presence.user.js` to install the userscript. On Windows the Node service runs as-is (`npm start`) but there's no installer yet — it'd need a Task Scheduler / startup entry instead of launchd. Chrome asks once to allow the page to reach your local network; say yes.
+## State
 
-Nothing here phones anywhere but Discord's local socket and your own browser tab: the service binds to 127.0.0.1 and only accepts posts from duelingbook.com pages. `captures/` (your recorded matches, which include your chat and friend list) is git-ignored — never share those files.
+Everything below is live and in daily use on macOS + Zen. The duel/watching/solo parsing was written against real captured matches and is regression-tested by replaying them (`npm test` — 16 tests; the replay suite self-skips when `captures/` is empty, e.g. on a fresh clone).
 
-## Setup
+Two caveats worth stating plainly:
+
+* **AFK** is built from DuelingBook's own `Away`/`Back` broadcasts and has never been observed firing in testing — the server decides when you're idle and the threshold is unknown.
+* **Linux and Windows autostart** are written but untested by the author; the service itself is plain Node and runs anywhere with `npm start`.
+
+`userscripts/db-capture.user.js` is the tool that produced those captures. Keep it installed but disabled; if DuelingBook changes (`main.js?v=` moves past 932) and a card goes wrong, enable it, play a match, click Download, and the JSON in `captures/` lets the replay test pin the new behaviour.
+
+## Install
+
+Three pieces: the **Discord desktop app** (Rich Presence only works through its local IPC socket — never the web app; keep *Settings → Activity Privacy → Share your detected activities* on), a **userscript manager**, and this **Node service**.
+
+### 1. The service (Node ≥ 20)
+
+```bash
+npm install --omit=dev
+```
+
+| OS | autostart | notes |
+|---|---|---|
+| macOS | `./install.sh` → launchd agent, logs to `~/Library/Logs/duelingbook-rpc.log` | tested |
+| Linux | `systemd/duelingbook-rpc.service` (header has the three commands) | untested — reports welcome |
+| Windows | `powershell -ExecutionPolicy Bypass -File windows\install.ps1` → logon task | untested — reports welcome |
+
+Any OS, without autostart: `npm start`. Check it with `npm run status`.
+
+### 2. The userscript
+
+**Firefox / Zen / Chrome / Edge** — install [Tampermonkey](https://www.tampermonkey.net/) (Violentmonkey works too), then open:
+
+```
+http://127.0.0.1:41337/userscripts/db-presence.user.js
+```
+
+The manager offers to install it. **Approve the `127.0.0.1` connect permission it asks for** — that is how the script reaches the service (see *How the browser half reaches the service* below; a plain page fetch is blocked by modern browsers). Updating later is the same URL.
+
+### 3. Discord application
+
+Everyone running this shares **one Discord application ID** — that is simply how Rich Presence works, one app per program — so the id in `config.json` is ready to use and the card already has its name and art. Your username, deck names, plays and timers all come from *your* DuelingBook session.
+
+To use your own instead: [Developer Portal](https://discord.com/developers/applications) → *New Application* (its name is what Discord prints after "Playing") → copy the **Application ID** into `config.json`, and upload an image under *Rich Presence → Art Assets* whose name matches `largeImageKey`. The service re-reads `config.json` on save.
+
+### Privacy of the setup itself
+
+The service binds to `127.0.0.1`, accepts posts only from duelingbook.com pages (or the extension relay), and talks to nothing but Discord's local socket. `captures/` — recorded matches, which include chat and your friend list — is git-ignored; never share those files.
+
+## Setup detail
 
 1. **Discord application ID.** <https://discord.com/developers/applications> → *New Application* (the name is what Discord shows as "Playing …", e.g. `DuelingBook`) → *General Information* → copy **Application ID** into `config.json` as `clientId`. The running service re-reads the file on save — no restart.
    Card image: *Rich Presence → Art Assets* → *Add Image(s)* → `assets/duelingbook.png` (name auto-fills as `duelingbook`, which matches `largeImageKey` in config.json) → *Save Changes*. Discord's client caches an app's asset list, so a new upload can take a few minutes — or a Discord restart — to show.

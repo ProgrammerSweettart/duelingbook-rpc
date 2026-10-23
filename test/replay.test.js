@@ -11,7 +11,7 @@ const vm = require('node:vm');
 const capDir = path.join(__dirname, '..', 'captures');
 const capture = fs.existsSync(capDir) ? fs.readdirSync(capDir).filter((f) => /^dbcap-.*\.json$/.test(f)).sort().pop() : null;
 
-function loadUserscript() {
+function loadUserscript(reveal) {
   const src = fs.readFileSync(path.join(__dirname, '..', 'userscripts', 'db-presence.user.js'), 'utf8');
   const els = {};
   class FakeWS {
@@ -21,6 +21,7 @@ function loadUserscript() {
     send() {} // patched by the userscript's outbound hook
   }
   const mem = new Map();
+  if (reveal) mem.set('dbrpc.reveal', reveal);
   const storage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
   let clock = 0;
   const stubEl = () => ({ textContent: '', remove() {}, appendChild() {}, hasAttribute: () => false, setAttribute() {} });
@@ -50,9 +51,9 @@ function loadUserscript() {
   return { win, els };
 }
 
-test('replays the captured match through the userscript', { skip: !capture && 'no captures/dbcap-*.json' }, () => {
+function runReplay(reveal) {
   const { events } = JSON.parse(fs.readFileSync(path.join(capDir, capture), 'utf8'));
-  const { win, els } = loadUserscript();
+  const { win, els } = loadUserscript(reveal);
   const ws = new win.WebSocket('wss://duel.duelingbook.com:8443/'); // goes through the hook
   const transitions = [];
   let last = null;
@@ -89,6 +90,11 @@ test('replays the captured match through the userscript', { skip: !capture && 'n
     win.setClock(e.t);
     if (sampleAfter) step(e.t);
   }
+  return { transitions, events, win };
+}
+
+test('replays the captured match through the userscript', { skip: !capture && 'no captures/dbcap-*.json' }, () => {
+  const { transitions, events, win } = runReplay();
   // eslint-disable-next-line no-console
   console.log('  transitions:\n' + transitions.map((t) => '    ' + JSON.stringify(t)).join('\n'));
 
@@ -121,7 +127,7 @@ test('replays the captured match through the userscript', { skip: !capture && 'n
   assert.ok(!transitions.some((t) => t.away), 'never AFK in this capture');
   assert.ok(duels.filter((d) => d.players).every((d) => d.players[0] === 'Sweettart'), 'player1 is always me');
   assert.ok(duels.some((d) => d.lp && d.lp[0] !== d.lp[1]), 'life points tracked');
-  assert.ok(decks.some((d) => d.deckName === '!Solder was here'), 'deck editor with a real deck name');
+  assert.ok(decks.length >= 3, 'deck editor visits are reported (names are withheld by the default reveal policy)');
   // match 1: Advanced rated, quit during game 1
   const m1 = duels.filter((d) => d.startedAt === duels[0].startedAt);
   assert.equal(m1[0].formatCode, 'ar');
@@ -136,22 +142,13 @@ test('replays the captured match through the userscript', { skip: !capture && 'n
   assert.deepEqual(phases, ['1', '2s', '2'], 'game 1 → siding for game 2 → game 2');
   assert.equal(String(m2.find((d) => d.siding).score), '0,1,0', 'my concession shows as a loss before Begin next duel confirms it');
   assert.equal(String(m2[m2.length - 1].lp), '4300,6000', 'life points at the end of game 2'); // String(): the array comes from the vm realm
-  assert.equal(m2[m2.length - 1].deck, 'Paleo Frog', 'deck in use from the outbound Host duel');
+  assert.ok(m2.every((d) => d.deck === undefined && d.lastCard === undefined), 'unrated match reveals neither deck nor card art');
+  assert.ok(duels.filter((d) => d.rated).every((d) => d.kind === 'duel'), 'rated duels present to compare against');
   assert.ok(m2.some((d) => d.turn === 4), 'turn counter');
   win.__dbrpc.tick();
   assert.equal(win.__lastPost.me, 'Sweettart');
   assert.equal(win.__lastPost.avatar, 'https://images.duelingbook.com/card-pics/15902.jpg', 'pic 15902.jpg resolves to card art, as getAvatarStart() does');
   assert.equal(new Set(m2.map((d) => d.startedAt)).size, 3, 'per-phase timer: game 1, siding, game 2');
-  // card art: only my own public plays, never a set. In the capture I Normal Summoned Swap Frog (4137) and Set ST several times.
-  const withCard = m2.filter((d) => d.lastCard);
-  assert.ok(withCard.length > 0, 'a face-up play of mine shows as the card art');
-  assert.ok(withCard.some((d) => d.lastCard.name === 'Swap Frog' && d.lastCard.id === 4137));
-  const setIds = new Set(events.filter((e) => e.type === 'ws-in' && e.json && e.json.action === 'Duel' && /^Set /.test(e.json.play) && e.json.username === 'Sweettart').map((e) => e.json.id));
-  assert.ok(setIds.size > 0 && !withCard.some((d) => setIds.has(d.lastCard.id)), 'nothing I set face-down ever becomes the art');
-  const drawn = events.filter((e) => e.type === 'ws-in' && e.json && e.json.action === 'Duel' && (e.json.play === 'Draw card' || e.json.play === 'To hand') && e.json.username === 'Sweettart' && e.json.card).map((e) => e.json.card.id);
-  const shownIds = new Set(withCard.map((d) => d.lastCard.id));
-  const summoned = new Set(events.filter((e) => e.type === 'ws-in' && e.json && e.json.action === 'Duel' && ['Normal Summon', 'SS ATK', 'SS DEF', 'Activate ST', 'To ST', 'OL ATK', 'OL DEF', 'Declare'].includes(e.json.play) && e.json.username === 'Sweettart' && e.json.card).map((e) => e.json.card.id));
-  for (const id of shownIds) assert.ok(summoned.has(id), `card ${id} shown only because of a public play`);
   assert.ok(watching.some((w) => w.watchers >= 1), 'spectator count while watching');
   // J's Back conceded the deciding game at 02:12:57 while I watched → result card naming the winner, gone once Back to RPS restarts the duel
   const wres = transitions.find((t) => t.kind === 'result' && t.winner);
@@ -167,4 +164,22 @@ test('replays the captured match through the userscript', { skip: !capture && 'n
   const lastDuelIdx = transitions.lastIndexOf(m2[m2.length - 1]);
   assert.notEqual(transitions[lastDuelIdx + 1].kind, 'duel');
   assert.ok(transitions[lastDuelIdx + 1].at < '01:41:01', 'duel ended at match end (01:40:50), not at Quit duel (01:41:01)');
+});
+
+test("reveal policy: 'ranked' hides deck-building and solo; 'always' still never leaks a set card", { skip: !capture && 'no captures/dbcap-*.json' }, () => {
+  // default policy: nothing about what I'm playing escapes outside a rated duel
+  const def = runReplay().transitions;
+  assert.ok(def.filter((t) => t.kind === 'deck').every((t) => t.deckName === undefined), 'deck editor names stay private');
+  assert.ok(def.filter((t) => t.kind === 'solo').every((t) => t.deck === undefined && t.lastCard === undefined), 'solo testing stays private');
+
+  // opted in: the deck and the card art appear, and the face-down rule still holds
+  const { transitions, events } = runReplay('always');
+  assert.ok(transitions.some((t) => t.kind === 'deck' && t.deckName), 'deck editor names appear when opted in');
+  const withCard = transitions.filter((t) => t.lastCard);
+  assert.ok(withCard.some((d) => d.lastCard.name === 'Swap Frog' && d.lastCard.id === 4137), 'a face-up play of mine shows as the card art');
+  const mine = (play) => events.filter((e) => e.type === 'ws-in' && e.json && e.json.action === 'Duel' && play(e.json.play) && e.json.username === 'Sweettart');
+  const setIds = new Set(mine((p) => /^Set /.test(p)).map((e) => e.json.id));
+  assert.ok(setIds.size > 0 && !withCard.some((d) => setIds.has(d.lastCard.id)), 'nothing I set face-down ever becomes the art');
+  const summoned = new Set(mine((p) => ['Normal Summon', 'SS ATK', 'SS DEF', 'Activate ST', 'To ST', 'OL ATK', 'OL DEF', 'Declare'].includes(p)).filter((e) => e.json.card).map((e) => e.json.card.id));
+  for (const d of withCard) assert.ok(summoned.has(d.lastCard.id), `card ${d.lastCard.id} shown only because of a public play`);
 });

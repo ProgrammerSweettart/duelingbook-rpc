@@ -1,0 +1,17 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20', '22', 'lts/*']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --omit=dev --no-audit --no-fund
+      # The replay suite needs a capture, which is gitignored (it contains chat and friend lists);
+      # it self-skips when captures/ is empty, so CI covers the unit + fake-Discord suites.
+      - run: npm test
