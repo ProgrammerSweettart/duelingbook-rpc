@@ -27,8 +27,9 @@ say "DuelingBook → Discord Rich Presence"
 
 # ---------------------------------------------------------------- app files
 SRC=""
-if [ -f "${BASH_SOURCE[0]}" ]; then
-  MAYBE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+SELF="${BASH_SOURCE[0]:-}"          # empty when piped from curl: there is no script file
+if [ -n "$SELF" ] && [ -f "$SELF" ]; then
+  MAYBE="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || true)"
   [ -n "$MAYBE" ] && [ -f "$MAYBE/server.js" ] && SRC="$MAYBE"
 fi
 
