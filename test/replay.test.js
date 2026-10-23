@@ -23,10 +23,18 @@ function loadUserscript() {
   const mem = new Map();
   const storage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
   let clock = 0;
+  const stubEl = () => ({ textContent: '', remove() {}, appendChild() {}, hasAttribute: () => false, setAttribute() {} });
   const win = {
     Date: class extends Date { static now() { return clock; } }, // the userscript only calls Date.now()
     setClock: (t) => { clock = t; },
-    document: { readyState: 'complete', getElementById: (id) => els[id] || null, addEventListener() {} },
+    // Enough DOM for the injector to run harmlessly; the test then calls pageMain() itself.
+    document: {
+      readyState: 'complete',
+      getElementById: (id) => els[id] || null,
+      addEventListener() {}, dispatchEvent() {},
+      createElement: stubEl, documentElement: stubEl(), head: null,
+    },
+    CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
     location: { href: 'https://www.duelingbook.com/' },
     navigator: { sendBeacon() {} },
     localStorage: storage, sessionStorage: storage,
@@ -38,6 +46,7 @@ function loadUserscript() {
   win.window = win;
   vm.createContext(win);
   vm.runInContext(src, win);
+  win.pageMain(); // the page half, which the real script injects into the page
   return { win, els };
 }
 

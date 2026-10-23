@@ -131,6 +131,9 @@ function corsHeaders(origin) {
 
 function originAllowed(origin) {
   if (!origin) return true; // curl / local tools: no Origin header
+  // Tampermonkey relays the POST from the extension (GM_xmlhttpRequest), which browsers may label
+  // "null" rather than the page's origin. The listener is bound to 127.0.0.1, so this stays local.
+  if (origin === 'null') return true;
   return cfg.allowedOrigins.includes(origin);
 }
 

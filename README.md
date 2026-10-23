@@ -108,10 +108,18 @@ The userscript posts on every change and heartbeats every 20 s; the service clea
 
 **Chattiness matters for what friends see.** Your own client renders every update instantly, but the copy that reaches other people is throttled and lossy — a burst of five updates in 12 s left a friend stuck on a transient "Browsing · Main menu". So: (1) a lobby screen has to hold for 8 s before it replaces another lobby screen (deliberate waits — pool, hosting — and anything live still switch at once), and (2) the service sends Discord at most one update per 15 s, latest state wins, no-ops skipped.
 
+## How the browser half reaches the service
+
+The userscript is in two halves. `pageMain()` is injected into the page at document-start (it must read DuelingBook's `var` globals and hook `window.WebSocket` before `main.js` loads); the userscript itself stays in Tampermonkey's sandbox and does the POSTing with `GM_xmlhttpRequest`. They talk over a `CustomEvent` on `document`.
+
+That split is not decoration. **A page served over https can no longer fetch `http://127.0.0.1`**: Firefox/Zen shipped Local Network Access (`network.lna.*`) in October 2026 and Chrome has Private Network Access. An extension-context request isn't subject to it, so the relay keeps working on both. This is why the script declares `@grant GM_xmlhttpRequest` and `@connect 127.0.0.1` — on update, Tampermonkey asks you to approve that connect permission once.
+
+If presence silently stops after a browser update, this is the first thing to suspect: the service log simply goes quiet (no rejected-origin lines, nothing), because the request never leaves the browser.
+
 ## Troubleshooting
 
 * `npm run status` says `discord: no-client-id` → fill in `config.json`. `invalid-client-id` → the ID is wrong (Discord answered close code 4000). `disconnected` → Discord desktop isn't running / not logged in; the service retries every 5–30 s.
-* Presence never changes: in the DB tab's console, `__dbrpc.state()` shows what the userscript thinks; `localStorage.setItem('dbrpc.debug','1')` logs each change. A red `[dbrpc] local service unreachable` means the agent is down (`./install.sh`) or uBlock's optional "Block Outsider Intrusion into LAN" list is on (allow `127.0.0.1` for duelingbook.com).
+* Presence never changes: in the DB tab's console, `__dbrpc.state()` shows what the userscript thinks (it lives on the page, injected by the sandbox half); `localStorage.setItem('dbrpc.debug','1')` logs each change. A red `[dbrpc] local service unreachable` means the agent is down (`./install.sh`) or uBlock's optional "Block Outsider Intrusion into LAN" list is on (allow `127.0.0.1` for duelingbook.com).
 * Port 41337 busy: change `port` in `config.json` **and** `ENDPOINT` in the userscript, then `./install.sh`.
 * Logs: `~/Library/Logs/duelingbook-rpc.log`.
 

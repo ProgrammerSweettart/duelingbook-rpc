@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuelingBook → Discord Rich Presence
 // @namespace    duelingbook-rpc
-// @version      0.7.1
+// @version      0.8.0
 // @description  Sends deck-editor / duel / watching / browsing / AFK state to the local duelingbook-rpc service, which mirrors it to Discord.
 // @author       duelingbook-rpc
 // @match        https://www.duelingbook.com/*
@@ -9,11 +9,23 @@
 // @run-at       document-start
 // @updateURL    http://127.0.0.1:41337/userscripts/db-presence.user.js
 // @downloadURL  http://127.0.0.1:41337/userscripts/db-presence.user.js
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      127.0.0.1
 // ==/UserScript==
 
 /*
-  Runs in the page context (@grant none) so it can read DuelingBook's own state, which lives in
+  TWO HALVES, on purpose:
+    * pageMain() is injected into the PAGE as a <script> at document-start, so it can read
+      DuelingBook's own `var` globals and hook window.WebSocket before main.js loads.
+    * the userscript itself stays in Tampermonkey's sandbox and does the networking with
+      GM_xmlhttpRequest, because browsers no longer let an https page reach http://127.0.0.1:
+      Firefox/Zen ship Local Network Access (network.lna.*, Oct 2026) and Chrome has Private
+      Network Access. An extension request isn't subject to that, so this survives both.
+      The two halves talk over a CustomEvent on document.
+    If GM_xmlhttpRequest is missing (script somehow running unsandboxed), the page half falls
+    back to fetch() — which works on older browsers and on plain http.
+
+  The page half reads DuelingBook's own state, which lives in
   plain `var` globals on window (verified on the live page and in a captured match): currentLabel,
   username, duel_active, duelist, duelId, match, games, rated, inPool, hosting, player1/player2
   (.username, .lifepoints — player1 is always you), deckName… plus a few hooked socket messages:
@@ -29,12 +41,15 @@
          window.__dbrpc.state()                    → current computed state
 */
 
-(() => {
+function pageMain() {
   'use strict';
   if (window.__dbrpc) return;
 
-  const VERSION = '0.7.1';
+  const VERSION = '0.8.0';
   const ENDPOINT = 'http://127.0.0.1:41337/presence';
+  const EV_SEND = '__dbrpc_send';
+  const EV_RESULT = '__dbrpc_result';
+  const bridgeUp = document.documentElement.hasAttribute('data-dbrpc-bridge');
   const POLL_MS = 1000;
   const HEARTBEAT_MS = 20000; // the service clears presence after 60 s without one
   const BROWSING_SETTLE_MS = 8000; // a lobby screen you merely pass through never reaches Discord
@@ -351,6 +366,27 @@
   let lastJson = null;
   let lastSentAt = 0;
   let lastWarnAt = 0;
+  // Hand the payload to the sandbox half (which has GM_xmlhttpRequest); fall back to a direct
+  // fetch when nothing is listening. Resolves on ok, rejects with the reason, so post() can retry.
+  let sendSeq = 0;
+  const inflight = new Map();
+  document.addEventListener(EV_RESULT, (e) => {
+    let d; try { d = JSON.parse(e.detail); } catch { return; }
+    const p = inflight.get(d.id);
+    if (!p) return;
+    inflight.delete(d.id);
+    d.ok ? p.resolve() : p.reject(new Error(d.error || 'relay failed'));
+  });
+  function send(json) {
+    if (!bridgeUp) return fetch(ENDPOINT, { method: 'POST', mode: 'cors', headers: { 'Content-Type': 'text/plain' }, body: json, keepalive: true })
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); });
+    const id = ++sendSeq;
+    return new Promise((resolve, reject) => {
+      inflight.set(id, { resolve, reject });
+      setTimeout(() => { if (inflight.delete(id)) reject(new Error('no reply from the extension half')); }, 10000);
+      document.dispatchEvent(new CustomEvent(EV_SEND, { detail: JSON.stringify({ id, body: json }) }));
+    });
+  }
   async function post(payload, { force = false } = {}) {
     const json = JSON.stringify(payload);
     const now = Date.now();
@@ -360,8 +396,7 @@
     lastJson = json;
     lastSentAt = now;
     try {
-      const res = await fetch(ENDPOINT, { method: 'POST', mode: 'cors', headers: { 'Content-Type': 'text/plain' }, body: json, keepalive: true });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await send(json);
     } catch (e) {
       lastJson = null; // retry on next tick
       if (now - lastWarnAt > 60000) {
@@ -423,9 +458,59 @@
     setInterval(tick, POLL_MS);
     tick();
     window.addEventListener('pagehide', () => {
-      try { navigator.sendBeacon(ENDPOINT, JSON.stringify({ v: 1, kind: 'none', source: `userscript@${VERSION}/pagehide` })); } catch { /* ignore */ }
+      const body = JSON.stringify({ v: 1, kind: 'none', source: `userscript@${VERSION}/pagehide` });
+      try { document.dispatchEvent(new CustomEvent(EV_SEND, { detail: JSON.stringify({ id: 0, body }) })); } catch { /* ignore */ }
+      if (!bridgeUp) { try { navigator.sendBeacon(ENDPOINT, body); } catch { /* ignore */ } }
     });
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox half: inject the page code, then relay its payloads to the service.
+// ---------------------------------------------------------------------------
+(() => {
+  'use strict';
+  const ENDPOINT = 'http://127.0.0.1:41337/presence';
+  const EV_SEND = '__dbrpc_send';
+  const EV_RESULT = '__dbrpc_result';
+  const gmx = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest
+    : (typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function' ? GM.xmlHttpRequest : null);
+
+  if (gmx) {
+    // Tell the page half a privileged relay is listening before its code runs.
+    document.documentElement.setAttribute('data-dbrpc-bridge', '1');
+    document.addEventListener(EV_SEND, (e) => {
+      let msg;
+      try { msg = JSON.parse(e.detail); } catch { return; }
+      const reply = (ok, error) => {
+        if (!msg.id) return; // id 0 = fire-and-forget (pagehide)
+        document.dispatchEvent(new CustomEvent(EV_RESULT, { detail: JSON.stringify({ id: msg.id, ok, error }) }));
+      };
+      try {
+        gmx({
+          method: 'POST',
+          url: ENDPOINT,
+          // text/plain keeps it a CORS "simple" request, so the service never sees a preflight
+          headers: { 'Content-Type': 'text/plain' },
+          data: msg.body,
+          timeout: 8000,
+          onload: (r) => reply(r.status >= 200 && r.status < 300, `HTTP ${r.status}`),
+          onerror: () => reply(false, 'network error'),
+          ontimeout: () => reply(false, 'timeout'),
+        });
+      } catch (err) {
+        reply(false, (err && err.message) || 'GM_xmlhttpRequest threw');
+      }
+    });
+  } else {
+    console.warn('[dbrpc] GM_xmlhttpRequest is unavailable; the page will try a direct fetch, which modern browsers block for local addresses.');
+  }
+
+  // Inject at document-start so the WebSocket hook is installed before DuelingBook's scripts run.
+  const el = document.createElement('script');
+  el.textContent = `(${pageMain})();`;
+  (document.head || document.documentElement).appendChild(el);
+  el.remove(); // the code keeps running; this only tidies the DOM
 })();
