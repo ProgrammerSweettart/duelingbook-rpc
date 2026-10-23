@@ -4,7 +4,7 @@
   "description": "Discord Rich Presence for DuelingBook (macOS)",
   "main": "index.js",
   "scripts": {
-    "test": "node --test --test-timeout=30000 test/",
+    "test": "node --test --test-timeout=30000",
     "start": "node server.js",
     "smoke": "node scripts/smoke.js",
     "install-agent": "./install.sh",
